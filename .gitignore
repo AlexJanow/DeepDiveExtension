@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Build artifacts
+extension/dist/
+backend/dist/
+*.log
+
+# Environment files
+.env
+.env.local
+.env.production
+backend/.env
+
+# IDE
+.vscode/
+.idea/
+.kiro
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Extension packaging
+*.crx
+*.pem
+*.zip
+
+# Documentation & Planning (keep essential files)
+*.pdf
+TASK_*.md
+*_SUMMARY.md
+*_COMPLETE.md
+*_VERIFICATION.md
+AGENTS.md
+PROJECT_OVERVIEW.md
+DEPLOYMENT.md
+DEPLOYMENT_SUMMARY.md
+QUICK_DEPLOY.md
+GROUNDING_FIX_SUMMARY.md
+INSTANT_SUMMARY_OPTIMIZATION.md
+SUMMARIZER_API_UPDATE.md
+# Keep essential docs
+!README.md
+!**/README.md

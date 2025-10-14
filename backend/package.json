@@ -1,0 +1,24 @@
+{
+  "name": "deepdive-assistant-backend",
+  "version": "0.1.0",
+  "description": "Backend service for DeepDive Assistant",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "verify": "node verify-deployment.js",
+    "deploy:firebase": "cd deployment/firebase-functions && npm install && firebase deploy --only functions",
+    "deploy:cloudrun": "cd deployment/cloud-run && gcloud builds submit --tag gcr.io/$PROJECT_ID/deepdive-assistant-backend && gcloud run deploy deepdive-assistant-backend --image gcr.io/$PROJECT_ID/deepdive-assistant-backend --platform managed --region us-central1",
+    "test:local": "node verify-deployment.js http://localhost:3000",
+    "test:grounding": "node test-grounding.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "cors": "^2.8.5",
+    "express": "^4.18.0"
+  },
+  "devDependencies": {
+    "dotenv": "^16.3.0"
+  }
+}

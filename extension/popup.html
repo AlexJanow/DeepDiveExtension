@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DeepDive Assistant</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>DeepDive Assistant</h1>
+      <p class="subtitle">Intelligent Article Analysis</p>
+    </header>
+    
+    <div class="controls">
+      <button id="summarizeBtn" class="btn btn-primary">
+        ⚡ Instant Summary
+      </button>
+      <button id="analyzeBtn" class="btn btn-secondary">
+        🧠 Deep Dive Analysis
+      </button>
+    </div>
+    
+    <div id="spinner" class="spinner" hidden>
+      <div class="spinner-icon"></div>
+      <p>Processing...</p>
+    </div>
+    
+    <div id="output" class="output"></div>
+    
+    <div id="error" class="error" hidden></div>
+    
+    <footer class="privacy-notice">
+      <div class="privacy-header">
+        <span class="privacy-icon">🔒</span>
+        <strong>Privacy & Data Handling</strong>
+      </div>
+      <div class="privacy-items">
+        <div class="privacy-item">
+          <span class="privacy-badge local">⚡ LOCAL</span>
+          <span class="privacy-text"><strong>Instant Summary:</strong> Processed entirely on your device. No data sent externally.</span>
+        </div>
+        <div class="privacy-item">
+          <span class="privacy-badge cloud">🧠 CLOUD</span>
+          <span class="privacy-text"><strong>Deep Dive:</strong> Sends article text to analysis service via secure HTTPS connection.</span>
+        </div>
+      </div>
+      <p class="privacy-note">All cached data is stored locally and automatically deleted when you uninstall this extension.</p>
+    </footer>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
