@@ -8,8 +8,9 @@ html {
   width: 400px !important;
   min-width: 400px !important;
   max-width: 400px !important;
-  height: auto !important;
-  min-height: 300px !important;
+  height: 800px !important;
+  max-height: 800px !important;
+  overflow: hidden !important;
 }
 
 body {
@@ -21,9 +22,11 @@ body {
   width: 400px !important;
   min-width: 400px !important;
   max-width: 400px !important;
-  min-height: 300px !important;
-  height: auto !important;
-  display: block !important;
+  height: 800px !important;
+  max-height: 800px !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
   margin: 0 !important;
   padding: 0 !important;
 }
@@ -32,10 +35,11 @@ body {
   background: white !important;
   display: flex !important;
   flex-direction: column !important;
-  min-height: 300px !important;
+  height: 100% !important;
   width: 100% !important;
   max-width: 400px !important;
   box-sizing: border-box !important;
+  overflow: hidden !important;
 }
 
 /* Header */
@@ -181,9 +185,9 @@ header h1 {
 /* Output Area */
 .output {
   padding: 20px;
-  max-height: 400px;
   overflow-y: auto;
   flex: 1;
+  min-height: 0;
 }
 
 .output:empty {
@@ -744,4 +748,30 @@ header h1 {
   background: #f9fafb;
   border-radius: 6px;
   border: 1px solid #e5e7eb;
+}
+
+/* Loading placeholders */
+.loading-placeholder {
+  padding: 20px;
+  text-align: center;
+  color: #666;
+  background: #f9f9f9;
+  border-radius: 4px;
+  margin: 10px 0;
+}
+
+.loading-placeholder p {
+  margin: 0;
+  font-size: 14px;
+  color: #666;
+}
+
+.spinner-small {
+  border: 3px solid #f3f3f3;
+  border-top: 3px solid #4285f4;
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 10px;
 }

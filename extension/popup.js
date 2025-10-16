@@ -492,6 +492,11 @@ class DeepDiveAssistant {
       this.isProcessing = false;
       this.preGeneratedSearchQuery = null;
       this.isGeneratingQuery = false; // Track if query generation is in progress
+      this.renderState = {
+        headerRendered: false,
+        articlesRendered: false,
+        analysisRendered: false
+      };
       
       // Bind methods
       this.handleInstantSummary = this.handleInstantSummary.bind(this);
@@ -1123,8 +1128,10 @@ class DeepDiveAssistant {
     
     try {
       console.log('Starting deep dive analysis process...');
-      this.showLoading();
       ErrorHandler.clearError(this.error);
+      
+      // Reset render state for progressive display
+      this.renderState = { headerRendered: false, articlesRendered: false, analysisRendered: false };
       
       // Get page text
       console.log('Getting page text from content script...');
@@ -1140,7 +1147,6 @@ class DeepDiveAssistant {
         if (cached?.value) {
           console.log('Using cached deep dive analysis');
           this.displayCachedResults(cached.value);
-          this.hideLoading();
           return;
         }
       }
@@ -1156,23 +1162,47 @@ class DeepDiveAssistant {
       const searchPromise = this.fetchRelatedArticles(searchQuery);
       const analysisPromise = this.fetchAnalysis(text, []);
       
-      // Display search results as soon as available
+      // Immediately render header and placeholders to establish order
+      this.output.innerHTML = `
+        <div class="result-header"><h3>🧠 Deep Dive Analysis</h3></div>
+        <div id="analysis-placeholder" class="loading-placeholder">
+          <div class="spinner-small"></div>
+          <p>Analyzing article content...</p>
+        </div>
+        <div id="articles-placeholder" class="loading-placeholder">
+          <div class="spinner-small"></div>
+          <p>Finding related articles...</p>
+        </div>
+      `;
+      this.output.hidden = false;
+      this.renderState.headerRendered = true;
+      
+      // Replace placeholders as each API call completes
+      analysisPromise.then(analysis => {
+        console.log('Analysis completed:', {
+          definitions: analysis.definitions?.length || 0,
+          mainArgs: analysis.arguments?.main?.length || 0,
+          counterArgs: analysis.arguments?.counter?.length || 0
+        });
+        this.displayAnalysis(analysis);
+      }).catch(error => {
+        console.warn('Analysis failed:', error.message);
+        const placeholder = document.getElementById('analysis-placeholder');
+        if (placeholder) {
+          placeholder.outerHTML = '<div class="analysis-section"><p class="error-text">Analysis failed. Please try again.</p></div>';
+        }
+      });
+      
       searchPromise.then(articles => {
         console.log(`Search completed: ${articles.length} articles`);
         this.displayRelatedArticles(articles);
       }).catch(error => {
         console.warn('Search failed:', error.message);
-        this.displayRelatedArticles([]); // Show empty state
+        this.displayRelatedArticles([]);
       });
       
-      // Wait for analysis and display
+      // Wait for both to complete for caching
       const analysis = await analysisPromise;
-      console.log('Analysis completed:', {
-        definitions: analysis.definitions?.length || 0,
-        mainArgs: analysis.arguments?.main?.length || 0,
-        counterArgs: analysis.arguments?.counter?.length || 0
-      });
-      this.displayAnalysis(analysis);
       
       // Cache combined result
       const combinedResult = {
@@ -1191,8 +1221,6 @@ class DeepDiveAssistant {
         this.output,
         { showRetry: errorInfo.recoverable, onRetry: () => this.handleDeepDiveAnalysis() }
       );
-    } finally {
-      this.hideLoading();
     }
   }
   
@@ -1291,7 +1319,11 @@ class DeepDiveAssistant {
    * @param {Array} articles - Related articles
    */
   displayRelatedArticles(articles) {
-    let html = '<div class="result-header"><h3>🧠 Deep Dive Analysis</h3></div>';
+    console.log('displayRelatedArticles called');
+    
+    let html = '';
+    
+    // Add articles section
     html += '<div class="analysis-section"><h4>📚 Related Articles</h4>';
     
     if (articles.length > 0) {
@@ -1301,11 +1333,22 @@ class DeepDiveAssistant {
       }
       html += '</ul>';
     } else {
-      html += '<p class="info-text">No related articles found at this time. This can happen when the search grounding service is temporarily unavailable. The analysis of definitions and arguments is still complete below.</p>';
+      html += '<p class="info-text">No related articles found at this time. This can happen when the search grounding service is temporarily unavailable.</p>';
     }
     html += '</div>';
     
-    this.displayOutput(html);
+    // Replace placeholder with articles content
+    const placeholder = document.getElementById('articles-placeholder');
+    if (placeholder) {
+      placeholder.outerHTML = html;
+      console.log('Articles placeholder replaced');
+    } else {
+      // Fallback: append if placeholder doesn't exist
+      this.output.innerHTML += html;
+      console.log('Articles appended (no placeholder found)');
+    }
+    
+    this.renderState.articlesRendered = true;
   }
   
   /**
@@ -1313,6 +1356,8 @@ class DeepDiveAssistant {
    * @param {Object} analysis - Analysis with definitions and arguments
    */
   displayAnalysis(analysis) {
+    console.log('displayAnalysis called');
+    
     let html = '';
     
     // Definitions
@@ -1342,10 +1387,18 @@ class DeepDiveAssistant {
       html += '</ul></div>';
     }
     
-    // Append to existing output
-    if (html) {
+    // Replace placeholder with analysis content
+    const placeholder = document.getElementById('analysis-placeholder');
+    if (placeholder) {
+      placeholder.outerHTML = html;
+      console.log('Analysis placeholder replaced');
+    } else {
+      // Fallback: append if placeholder doesn't exist
       this.output.innerHTML += html;
+      console.log('Analysis appended (no placeholder found)');
     }
+    
+    this.renderState.analysisRendered = true;
   }
   
   /**
