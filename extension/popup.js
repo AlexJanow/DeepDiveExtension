@@ -77,6 +77,32 @@ class CacheManager {
 }
 
 /**
+ * SettingsManager handles user preferences
+ */
+class SettingsManager {
+  constructor() {
+    this.storage = chrome.storage.sync;
+    this.defaults = {
+      queryGenerationMode: 'immediate' // 'immediate' or 'on-demand'
+    };
+  }
+  
+  async get(key) {
+    const result = await this.storage.get(key);
+    return result[key] ?? this.defaults[key];
+  }
+  
+  async set(key, value) {
+    await this.storage.set({ [key]: value });
+  }
+  
+  async getAll() {
+    const result = await this.storage.get(null);
+    return { ...this.defaults, ...result };
+  }
+}
+
+/**
  * SummarizerService handles Chrome's built-in Summarizer API
  * Must run in popup context (top-level window), not service worker
  */
@@ -84,9 +110,10 @@ class SummarizerService {
   constructor(options = {}) {
     this.summarizer = null;
     this.options = {
+      // For concise results, default to a single-sentence TL;DR
       type: options.type || 'tldr',
       format: options.format || 'markdown',
-      length: options.length || 'long'
+      length: options.length || 'short'
     };
   }
   
@@ -213,9 +240,11 @@ class SummarizerService {
     }
     
     try {
-      // Generate summary with optional context
+      // Generate summary with optional context and explicit output language
       const summary = await this.summarizer.summarize(textToSummarize, {
-        context: context || 'Web article'
+        context: context || 'Web article',
+        // Setting outputLanguage per request silences API warning and improves quality
+        outputLanguage: 'en'
       });
       
       return summary;
@@ -446,25 +475,28 @@ class DeepDiveAssistant {
     
     try {
       this.cache = new CacheManager();
-      console.log('CacheManager initialized');
-      
+      this.settings = new SettingsManager();
       this.summarizerService = new SummarizerService();
-      console.log('SummarizerService initialized');
+      console.log('Services initialized');
       
       // UI elements
       console.log('Looking for UI elements...');
       this.summarizeBtn = document.getElementById('summarizeBtn');
       this.analyzeBtn = document.getElementById('analyzeBtn');
+      this.immediateQueryGenCheckbox = document.getElementById('immediateQueryGen');
       this.spinner = document.getElementById('spinner');
       this.output = document.getElementById('output');
       this.error = document.getElementById('error');
       
       // State
       this.isProcessing = false;
+      this.preGeneratedSearchQuery = null;
+      this.isGeneratingQuery = false; // Track if query generation is in progress
       
       // Bind methods
       this.handleInstantSummary = this.handleInstantSummary.bind(this);
       this.handleDeepDiveAnalysis = this.handleDeepDiveAnalysis.bind(this);
+      this.handleSettingsChange = this.handleSettingsChange.bind(this);
       console.log('Methods bound');
       
       // Initialize
@@ -476,26 +508,87 @@ class DeepDiveAssistant {
   }
   
   /**
-   * Initialize event listeners
+   * Initialize event listeners and settings
    */
-  init() {
+  async init() {
     console.log('Initializing DeepDive Assistant...');
     console.log('UI Elements:', {
       summarizeBtn: this.summarizeBtn ? 'found' : 'MISSING',
       analyzeBtn: this.analyzeBtn ? 'found' : 'MISSING',
+      immediateQueryGenCheckbox: this.immediateQueryGenCheckbox ? 'found' : 'MISSING',
       spinner: this.spinner ? 'found' : 'MISSING',
       output: this.output ? 'found' : 'MISSING',
       error: this.error ? 'found' : 'MISSING'
     });
     
-    if (!this.summarizeBtn || !this.analyzeBtn) {
+    if (!this.summarizeBtn || !this.analyzeBtn || !this.immediateQueryGenCheckbox) {
       console.error('ERROR: Required UI elements not found!');
       return;
     }
     
+    // Load settings
+    const mode = await this.settings.get('queryGenerationMode');
+    this.immediateQueryGenCheckbox.checked = (mode === 'immediate');
+    
+    // Attach event listeners
     this.summarizeBtn.addEventListener('click', this.handleInstantSummary);
     this.analyzeBtn.addEventListener('click', this.handleDeepDiveAnalysis);
+    this.immediateQueryGenCheckbox.addEventListener('change', this.handleSettingsChange);
     console.log('Event listeners attached successfully');
+    
+    // Pre-generate search query if immediate mode is enabled
+    if (mode === 'immediate') {
+      this.preGenerateSearchQuery();
+    }
+  }
+  
+  /**
+   * Handle settings checkbox change
+   */
+  async handleSettingsChange() {
+    const isImmediate = this.immediateQueryGenCheckbox.checked;
+    const mode = isImmediate ? 'immediate' : 'on-demand';
+    await this.settings.set('queryGenerationMode', mode);
+    console.log(`Query generation mode changed to: ${mode}`);
+    
+    // If switching to immediate mode and no query exists, generate now
+    if (isImmediate && !this.preGeneratedSearchQuery && !this.isGeneratingQuery) {
+      this.preGenerateSearchQuery();
+    }
+  }
+  
+  /**
+   * Pre-generate search query when popup opens for faster Deep Dive Analysis
+   */
+  async preGenerateSearchQuery() {
+    if (this.isGeneratingQuery) {
+      console.log('Query generation already in progress, skipping...');
+      return;
+    }
+    
+    try {
+      this.isGeneratingQuery = true;
+      console.log('Pre-generating search query...');
+      
+      // Get page text + meta
+      const page = await this.getPageText();
+      
+      // Generate search query using local Summarizer API
+      const searchQuery = await this.generateSearchQuery(page.text, { title: page.title, heading: page.heading });
+      
+      if (searchQuery) {
+        this.preGeneratedSearchQuery = searchQuery;
+        console.log('Pre-generated search query:', searchQuery);
+      } else {
+        console.log('No search query generated, will use fallback approach');
+      }
+      
+    } catch (error) {
+      console.warn('Failed to pre-generate search query:', error.message);
+      // Continue without pre-generated query - fallback will be used
+    } finally {
+      this.isGeneratingQuery = false;
+    }
   }
   
   /**
@@ -775,12 +868,73 @@ class DeepDiveAssistant {
   }
   
   /**
+   * Generate search query using local Summarizer API
+   * @param {string} articleText - Article text to analyze
+   * @returns {Promise<string>} Generated search query
+   */
+  async generateSearchQuery(articleText, meta = {}) {
+    try {
+      console.log('Generating search query using local Summarizer API...');
+      
+      // Check API availability
+      const availability = await this.summarizerService.checkAvailability();
+      if (!availability.available) {
+        console.warn('Summarizer API not available, skipping query generation');
+        return null;
+      }
+      
+      // Create a specialized summarizer for key points extraction
+      const querySummarizer = await Summarizer.create({
+        // Produce a single-line, query-like headline
+        type: 'headline',
+        length: 'short',
+        sharedContext: 'Produce a concise headline suitable as a web search query (no markdown).',
+        outputLanguage: 'en'
+      });
+      
+      // Generate key points with proper input truncation (limit to 5000 chars)
+      const truncatedText = articleText.substring(0, 5000);
+      // Pass output language explicitly to avoid API warnings and ensure consistent output
+      const keyPoints = await querySummarizer.summarize(truncatedText, { outputLanguage: 'en', context: 'Return concise, comma-separated search keyphrases without markdown.' });
+      
+      // Clean up the summarizer
+      querySummarizer.destroy();
+      
+      // Sanitize into a clean search query: remove bullets/markdown and collapse whitespace
+      let searchQuery = keyPoints
+        .replace(/^[-*]\s+/gm, '')
+        .replace(/[\r\n]+/g, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim()
+        .slice(0, 300);
+
+      // If the result looks generic (e.g., site-wide headlines), fall back to page heading/title
+      const generic = /\b(latest updates|breaking news|top stories|live updates|news|politics|world|home)\b/i;
+      if (generic.test(searchQuery)) {
+        const fallback = (meta.heading && meta.heading.length > 20) ? meta.heading : (meta.title || '');
+        if (fallback) {
+          searchQuery = fallback.trim().replace(/[\r\n]+/g, ' ').slice(0, 300);
+          console.log('Search query looked generic; using fallback heading/title');
+        }
+      }
+      console.log('Generated search query:', searchQuery);
+      
+      return searchQuery;
+      
+    } catch (error) {
+      console.warn('Failed to generate search query:', error.message);
+      return null;
+    }
+  }
+  
+  /**
    * Perform deep dive analysis using backend API
    * @param {string} text - Article text to analyze
    * @param {string[]} concepts - Optional array of concepts to define
+   * @param {string} searchQuery - Optional search query generated by local AI
    * @returns {Promise<Object>} Analysis result with relatedArticles, definitions, and arguments
    */
-  async deepDiveAnalysis(text, concepts = []) {
+  async deepDiveAnalysis(text, concepts = [], searchQuery = null) {
     // Backend API URL (configurable)
     // In production, this should be an HTTPS URL
     // For local development, HTTP localhost is allowed
@@ -801,7 +955,8 @@ class DeepDiveAssistant {
         },
         body: JSON.stringify({
           article: text,
-          concepts: concepts.length > 0 ? concepts : undefined
+          concepts: concepts.length > 0 ? concepts : undefined,
+          searchQuery: searchQuery || undefined
         })
       });
       
@@ -839,11 +994,11 @@ class DeepDiveAssistant {
         throw new Error('Invalid response format from server');
       }
       
-      // Return structured result
+      // Handle both old and new response formats for backward compatibility
       return {
         relatedArticles: result.relatedArticles || [],
-        definitions: result.definitions || [],
-        arguments: result.arguments || { main: [], counter: [] }
+        definitions: result.analysis?.definitions || result.definitions || [],
+        arguments: result.analysis?.arguments || result.arguments || { main: [], counter: [] }
       };
       
     } catch (error) {
@@ -879,13 +1034,13 @@ class DeepDiveAssistant {
       }
       
       html += '</ul></div>';
-    } else {
-      // Show message when no articles are found
-      html += '<div class="analysis-section">';
-      html += '<h4>📚 Related Articles</h4>';
-      html += '<p class="info-text">No related articles found. The analysis focused on the content itself.</p>';
-      html += '</div>';
-    }
+  } else {
+    // Show message when no articles are found
+    html += '<div class="analysis-section">';
+    html += '<h4>📚 Related Articles</h4>';
+    html += '<p class="info-text">No related articles found at this time. This can happen when the search grounding service is temporarily unavailable. The analysis of definitions and arguments is still complete below.</p>';
+    html += '</div>';
+  }
     
     // Key Terms section
     if (analysis.definitions && analysis.definitions.length > 0) {
@@ -975,73 +1130,329 @@ class DeepDiveAssistant {
       console.log('Getting page text from content script...');
       const { text, url } = await this.getPageText();
 
-      // Generate a cache key specific to deep dive analysis to avoid collision with Instant Summary
+      // Generate cache key
       const baseKey = await this.cache.generateCacheKey(url, text);
       const cacheKey = `${baseKey}:deep-dive`;
 
-      // Serve from cache if available
+      // Check cache
       if (await this.cache.isValid(cacheKey)) {
         const cached = await this.cache.get(cacheKey);
-        if (cached && cached.value && typeof cached.value === 'object') {
+        if (cached?.value) {
           console.log('Using cached deep dive analysis');
-          let html = this.renderAnalysisResults(cached.value);
-          // Add cached badge to the header
-          html = html.replace(
-            '<div class="result-header">',
-            '<div class="result-header"><span class="cache-badge">Cached</span>'
-          );
-          this.displayOutput(html);
+          this.displayCachedResults(cached.value);
           this.hideLoading();
           return;
         }
       }
       
-      console.log('Starting deep dive analysis...');
+      // Wait for search query if in progress
+      await this.waitForSearchQuery();
+      const searchQuery = this.preGeneratedSearchQuery;
+      
       console.log(`Article length: ${text.length} characters from ${url}`);
+      console.log(`Search query: ${searchQuery || 'none'}`);
       
-      // Call backend API for analysis
-      const analysis = await this.deepDiveAnalysis(text);
+      // Start both API calls in parallel
+      const searchPromise = this.fetchRelatedArticles(searchQuery);
+      const analysisPromise = this.fetchAnalysis(text, []);
       
-      console.log('Analysis complete:', {
-        relatedArticles: analysis.relatedArticles.length,
-        definitions: analysis.definitions.length,
-        mainArguments: analysis.arguments.main.length,
-        counterArguments: analysis.arguments.counter.length
+      // Display search results as soon as available
+      searchPromise.then(articles => {
+        console.log(`Search completed: ${articles.length} articles`);
+        this.displayRelatedArticles(articles);
+      }).catch(error => {
+        console.warn('Search failed:', error.message);
+        this.displayRelatedArticles([]); // Show empty state
       });
       
-      // Cache the result
-      await this.cache.set(cacheKey, analysis);
-
-      // Render and display results
-      const html = this.renderAnalysisResults(analysis);
-      this.displayOutput(html);
+      // Wait for analysis and display
+      const analysis = await analysisPromise;
+      console.log('Analysis completed:', {
+        definitions: analysis.definitions?.length || 0,
+        mainArgs: analysis.arguments?.main?.length || 0,
+        counterArgs: analysis.arguments?.counter?.length || 0
+      });
+      this.displayAnalysis(analysis);
+      
+      // Cache combined result
+      const combinedResult = {
+        relatedArticles: await searchPromise.catch(() => []),
+        definitions: analysis.definitions,
+        arguments: analysis.arguments
+      };
+      await this.cache.set(cacheKey, combinedResult);
       
     } catch (error) {
-      console.error('=== ERROR in handleDeepDiveAnalysis ===');
-      console.error('Error:', error);
-      console.error('Error name:', error.name);
-      console.error('Error message:', error.message);
-      console.error('Error stack:', error.stack);
-      
+      console.error('Deep dive analysis error:', error);
       const errorInfo = ErrorHandler.handle(error, 'deepDiveAnalysis');
-      console.log('Error info:', errorInfo);
-      
-      // Show retry button for recoverable errors
       ErrorHandler.displayError(
         errorInfo.message, 
         this.error, 
         this.output,
-        {
-          showRetry: errorInfo.recoverable,
-          onRetry: () => this.handleDeepDiveAnalysis()
-        }
+        { showRetry: errorInfo.recoverable, onRetry: () => this.handleDeepDiveAnalysis() }
       );
     } finally {
-      console.log('handleDeepDiveAnalysis finally block');
       this.hideLoading();
     }
   }
   
+  /**
+   * Wait for search query generation to complete
+   */
+  async waitForSearchQuery() {
+    if (this.isGeneratingQuery) {
+      console.log('Waiting for search query generation...');
+      const startWait = Date.now();
+      const maxWait = 10000;
+      
+      while (this.isGeneratingQuery && (Date.now() - startWait) < maxWait) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      if (this.isGeneratingQuery) {
+        console.warn('Search query generation timed out');
+      }
+    }
+    
+    // If no pre-generated query and mode is on-demand, generate now
+    const mode = await this.settings.get('queryGenerationMode');
+    if (!this.preGeneratedSearchQuery && mode === 'on-demand' && !this.isGeneratingQuery) {
+      console.log('Generating search query on-demand...');
+      await this.preGenerateSearchQuery();
+    }
+  }
+  
+  /**
+   * Fetch related articles from /search endpoint
+   * @param {string} searchQuery - Search query
+   * @returns {Promise<Array>} Related articles
+   */
+  async fetchRelatedArticles(searchQuery) {
+    if (!searchQuery) {
+      console.warn('No search query available');
+      return [];
+    }
+    
+    const BACKEND_URL = 'http://localhost:3001';
+    const url = new URL(BACKEND_URL);
+    if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1' && url.protocol !== 'https:') {
+      throw new Error('Backend URL must use HTTPS for security');
+    }
+    
+    const response = await fetch(`${BACKEND_URL}/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ searchQuery })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `Search failed: ${response.status}`);
+    }
+
+    const result = await response.json();
+    return result.articles || [];
+  }
+  
+  /**
+   * Fetch analysis from /analyze endpoint
+   * @param {string} text - Article text
+   * @param {Array} concepts - Optional concepts
+   * @returns {Promise<Object>} Analysis with definitions and arguments
+   */
+  async fetchAnalysis(text, concepts = []) {
+    const BACKEND_URL = 'http://localhost:3001';
+    const url = new URL(BACKEND_URL);
+    if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1' && url.protocol !== 'https:') {
+      throw new Error('Backend URL must use HTTPS for security');
+    }
+    
+    const response = await fetch(`${BACKEND_URL}/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ article: text, concepts })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = errorData.error || errorData.message || `Analysis failed: ${response.status}`;
+      const error = new Error(errorMessage);
+      if (response.status === 429) error.name = 'RateLimitError';
+      else if (response.status >= 500) error.name = 'ServerError';
+      else error.name = 'NetworkError';
+      throw error;
+    }
+
+    return await response.json();
+  }
+  
+  /**
+   * Display related articles immediately
+   * @param {Array} articles - Related articles
+   */
+  displayRelatedArticles(articles) {
+    let html = '<div class="result-header"><h3>🧠 Deep Dive Analysis</h3></div>';
+    html += '<div class="analysis-section"><h4>📚 Related Articles</h4>';
+    
+    if (articles.length > 0) {
+      html += '<ul class="related-articles">';
+      for (const article of articles) {
+        html += `<li><a href="${this.escapeHtml(article.url)}" target="_blank" rel="noopener noreferrer">${this.escapeHtml(article.title)}</a></li>`;
+      }
+      html += '</ul>';
+    } else {
+      html += '<p class="info-text">No related articles found at this time. This can happen when the search grounding service is temporarily unavailable. The analysis of definitions and arguments is still complete below.</p>';
+    }
+    html += '</div>';
+    
+    this.displayOutput(html);
+  }
+  
+  /**
+   * Display analysis (definitions & arguments)
+   * @param {Object} analysis - Analysis with definitions and arguments
+   */
+  displayAnalysis(analysis) {
+    let html = '';
+    
+    // Definitions
+    if (analysis.definitions?.length > 0) {
+      html += '<div class="analysis-section"><h4>📖 Key Terms</h4><dl class="definitions">';
+      for (const def of analysis.definitions) {
+        html += `<dt>${this.escapeHtml(def.term)}</dt><dd>${this.escapeHtml(def.definition)}</dd>`;
+      }
+      html += '</dl></div>';
+    }
+    
+    // Main arguments
+    if (analysis.arguments?.main?.length > 0) {
+      html += '<div class="analysis-section"><h4>✅ Main Arguments</h4><ul class="arguments">';
+      for (const arg of analysis.arguments.main) {
+        html += `<li>${this.escapeHtml(arg)}</li>`;
+      }
+      html += '</ul></div>';
+    }
+    
+    // Counter arguments
+    if (analysis.arguments?.counter?.length > 0) {
+      html += '<div class="analysis-section"><h4>⚖️ Counter Arguments</h4><ul class="arguments counter">';
+      for (const arg of analysis.arguments.counter) {
+        html += `<li>${this.escapeHtml(arg)}</li>`;
+      }
+      html += '</ul></div>';
+    }
+    
+    // Append to existing output
+    if (html) {
+      this.output.innerHTML += html;
+    }
+  }
+  
+  /**
+   * Display cached results
+   * @param {Object} cached - Cached analysis result
+   */
+  displayCachedResults(cached) {
+    let html = this.renderAnalysisResults(cached);
+    html = html.replace(
+      '<div class="result-header">',
+      '<div class="result-header"><span class="cache-badge">Cached</span>'
+    );
+    this.displayOutput(html);
+  }
+  
+  /**
+   * Display analysis results progressively for fastest perceived performance
+   * @param {Object} analysis - Analysis result with relatedArticles and analysis fields
+   */
+  displayProgressiveResults(analysis) {
+    // Start with header and search results (fastest to render)
+    let html = '<div class="result-header"><h3>🧠 Deep Dive Analysis</h3></div>';
+    
+    // Display search results immediately
+    if (analysis.relatedArticles && analysis.relatedArticles.length > 0) {
+      html += '<div class="analysis-section">';
+      html += '<h4>📚 Related Articles</h4>';
+      html += '<ul class="related-articles">';
+      
+      for (const article of analysis.relatedArticles) {
+        html += `<li><a href="${this.escapeHtml(article.url)}" target="_blank" rel="noopener noreferrer">${this.escapeHtml(article.title)}</a></li>`;
+      }
+      
+      html += '</ul></div>';
+    } else {
+      html += '<div class="analysis-section">';
+      html += '<h4>📚 Related Articles</h4>';
+      html += '<p class="info-text">No related articles found. The analysis focused on the content itself.</p>';
+      html += '</div>';
+    }
+    
+    // Display initial content
+    this.displayOutput(html);
+    
+    // Use setTimeout to allow UI to update before processing heavier analysis sections
+    setTimeout(() => {
+      this.appendAnalysisSections(analysis);
+    }, 0);
+  }
+
+  /**
+   * Append definitions and arguments sections to existing output
+   * @param {Object} analysis - Analysis result
+   */
+  appendAnalysisSections(analysis) {
+    let additionalHtml = '';
+    
+    // Get the analysis data (handle both old and new response formats)
+    const definitions = analysis.analysis?.definitions || analysis.definitions || [];
+    const args = analysis.analysis?.arguments || analysis.arguments || { main: [], counter: [] };
+    
+    // Key Terms section
+    if (definitions.length > 0) {
+      additionalHtml += '<div class="analysis-section">';
+      additionalHtml += '<h4>📖 Key Terms</h4>';
+      additionalHtml += '<dl class="definitions">';
+      
+      for (const def of definitions) {
+        additionalHtml += `<dt>${this.escapeHtml(def.term)}</dt>`;
+        additionalHtml += `<dd>${this.escapeHtml(def.definition)}</dd>`;
+      }
+      
+      additionalHtml += '</dl></div>';
+    }
+    
+    // Main arguments
+    if (args.main && args.main.length > 0) {
+      additionalHtml += '<div class="analysis-section">';
+      additionalHtml += '<h4>✅ Main Arguments</h4>';
+      additionalHtml += '<ul class="arguments">';
+      
+      for (const arg of args.main) {
+        additionalHtml += `<li>${this.escapeHtml(arg)}</li>`;
+      }
+      
+      additionalHtml += '</ul></div>';
+    }
+    
+    // Counter arguments
+    if (args.counter && args.counter.length > 0) {
+      additionalHtml += '<div class="analysis-section">';
+      additionalHtml += '<h4>⚖️ Counter Arguments</h4>';
+      additionalHtml += '<ul class="arguments counter">';
+      
+      for (const arg of args.counter) {
+        additionalHtml += `<li>${this.escapeHtml(arg)}</li>`;
+      }
+      
+      additionalHtml += '</ul></div>';
+    }
+    
+    // Append to existing output
+    if (additionalHtml) {
+      this.output.innerHTML += additionalHtml;
+    }
+  }
+
   /**
    * Cleanup resources
    */

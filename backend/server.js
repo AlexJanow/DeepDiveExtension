@@ -8,7 +8,7 @@ import { createRateLimitMiddleware } from './rate-limiter.js';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 
 // Validate required environment variables
 if (!process.env.GEMINI_API_KEY) {
@@ -68,36 +68,40 @@ app.use('/analyze', createRateLimitMiddleware(rateLimitConfig));
 
 // Helper function to build analysis prompt
 function buildAnalysisPrompt(article, concepts = []) {
-  const conceptsText = concepts.length > 0 
-    ? concepts.join(', ') 
+  const conceptsText = concepts.length > 0
+    ? concepts.join(', ')
     : 'identify 3-5 key terms from the article';
-  
-  return `Analyze the following article and provide a structured response.
 
-IMPORTANT: You MUST use Google Search to find real, existing related articles. Do NOT generate fake URLs. Only return URLs that you have actually found through search grounding.
+  // Truncate excessively long articles to keep prompt efficient
+  const ARTICLE_MAX = 10000;
+  const trimmedArticle = typeof article === 'string' && article.length > ARTICLE_MAX
+    ? `${article.slice(0, ARTICLE_MAX)}...`
+    : article;
 
-Article:
-${article}
+  return `Analyze the following article and extract key information.
 
-Please provide:
-1. Related articles - USE GOOGLE SEARCH to find 3 real articles on reputable sites (NOT fabricated)
-2. Definitions for these key terms: ${conceptsText}
-3. Main arguments presented in the article
-4. Potential counter-arguments or alternative perspectives
+ARTICLE CONTENT:
+${trimmedArticle}
 
-CRITICAL: If you cannot find real related articles via Google Search, return an empty relatedArticles array. Do not make up URLs.
-
-Return valid JSON:
+Return ONLY a JSON object with this exact structure:
 {
-  "relatedArticles": [{"title": "...", "url": "https://..."}],
-  "definitions": [{"term": "...", "definition": "..."}],
+  "definitions": [
+    {"term": "term1", "definition": "definition1"},
+    {"term": "term2", "definition": "definition2"}
+  ],
   "arguments": {
-    "main": ["argument 1", "argument 2", ...],
-    "counter": ["counter-argument 1", "counter-argument 2", ...]
+    "main": ["argument1", "argument2"],
+    "counter": ["counter1", "counter2"]
   }
 }
 
-Respond ONLY with the JSON object, no additional text or markdown formatting.`;
+REQUIREMENTS:
+- Definitions should focus on: ${conceptsText}
+- Identify 3-5 key terms with clear, concise definitions
+- Extract 2-5 main arguments from the article
+- Extract 1-3 counter-arguments if present in the article
+- Base analysis ONLY on the article content provided above
+- Do NOT include citation numbers or references in your response`;
 }
 // Helper to extract grounded links from Gemini response if available
 function extractRelatedArticlesFromGrounding(geminiResponse) {
@@ -152,7 +156,7 @@ function parseGeminiResponse(text) {
     console.log('Found JSON in markdown code block');
     try {
       const parsed = JSON.parse(jsonCodeBlockMatch[1]);
-      return validateAndNormalizeResponse(parsed);
+      return stripCitations(validateAndNormalizeResponse(parsed));
     } catch (error) {
       console.warn('Failed to parse JSON from code block:', error.message);
     }
@@ -164,7 +168,7 @@ function parseGeminiResponse(text) {
     console.log('Found content in generic code block');
     try {
       const parsed = JSON.parse(codeBlockMatch[1]);
-      return validateAndNormalizeResponse(parsed);
+      return stripCitations(validateAndNormalizeResponse(parsed));
     } catch (error) {
       console.warn('Failed to parse JSON from generic code block:', error.message);
     }
@@ -176,7 +180,7 @@ function parseGeminiResponse(text) {
     console.log('Found JSON object in text');
     try {
       const parsed = JSON.parse(jsonObjectMatch[0]);
-      return validateAndNormalizeResponse(parsed);
+      return stripCitations(validateAndNormalizeResponse(parsed));
     } catch (error) {
       console.warn('Failed to parse extracted JSON object:', error.message);
     }
@@ -186,7 +190,7 @@ function parseGeminiResponse(text) {
   try {
     console.log('Attempting to parse entire response as JSON');
     const parsed = JSON.parse(text);
-    return validateAndNormalizeResponse(parsed);
+    return stripCitations(validateAndNormalizeResponse(parsed));
   } catch (error) {
     console.warn('Failed to parse entire response as JSON:', error.message);
   }
@@ -308,6 +312,32 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+/**
+ * Recursively strip citation numbers like [1], [2], [10] from all strings
+ * @param {*} obj - Object, array, or string to clean
+ * @returns {*} Cleaned version without citations
+ */
+function stripCitations(obj) {
+  if (typeof obj === 'string') {
+    // Remove citation numbers [1], [2], [10] etc and clean up whitespace
+    return obj.replace(/\s*\[\d+\]\s*/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  
+  if (Array.isArray(obj)) {
+    return obj.map(item => stripCitations(item));
+  }
+  
+  if (typeof obj === 'object' && obj !== null) {
+    const cleaned = {};
+    for (const [key, value] of Object.entries(obj)) {
+      cleaned[key] = stripCitations(value);
+    }
+    return cleaned;
+  }
+  
+  return obj;
+}
+
 // Analyze endpoint
 app.post('/analyze', async (req, res, next) => {
   const startTime = Date.now();
@@ -377,69 +407,160 @@ app.post('/analyze', async (req, res, next) => {
     console.log(`Article length: ${article.length} chars`);
     console.log(`Concepts: ${concepts ? concepts.join(', ') : 'auto-detect'}`);
     
-    // Build prompt for Gemini
+    // Build prompt for Gemini (content analysis only, no search)
     const prompt = buildAnalysisPrompt(article, concepts);
-    console.log('Calling Gemini API (with Google Search grounding)...');
+    console.log('Calling Gemini API (content analysis only)...');
     
-    // Call Gemini API with Google Search grounding tool
-    const tools = [{ google_search: {} }];
+    // Call Gemini API for pure content analysis (no grounding tools)
     const result = await model.generateContent({
-      contents: [
-        { role: 'user', parts: [{ text: prompt }] }
-      ],
-      tools
+      contents: [{ role: 'user', parts: [{ text: prompt }] }]
     });
     const responseText = result.response.text();
     
     console.log('Gemini API response received');
     console.log('Response preview:', responseText.substring(0, 200));
     
-    // Log grounding metadata for debugging
-    const candidate = result.response.candidates?.[0];
-    console.log('Grounding metadata:', JSON.stringify({
-      hasMetadata: !!candidate?.groundingMetadata,
-      chunkCount: candidate?.groundingMetadata?.groundingChunks?.length || 0,
-      webSearchQueries: candidate?.groundingMetadata?.webSearchQueries || []
-    }, null, 2));
-    
-    // Try to extract grounded related articles first
-    const groundedArticles = extractRelatedArticlesFromGrounding(result.response);
-    
-    // Parse and validate the response (JSON body)
+    // Parse and validate the response (JSON body only - no grounding)
     const parsedResponse = parseGeminiResponse(responseText);
-    
-    // Validate grounded URLs and prefer them if valid
-    if (groundedArticles.length > 0) {
-      const validArticles = groundedArticles.filter(article => {
-        try {
-          const url = new URL(article.url);
-          return url.protocol === 'https:' || url.protocol === 'http:';
-        } catch {
-          console.warn(`Invalid grounded URL: ${article.url}`);
-          return false;
-        }
-      });
-      
-      if (validArticles.length > 0) {
-        parsedResponse.relatedArticles = validArticles;
-        console.log(`Using ${validArticles.length} validated grounded articles`);
-      } else {
-        console.warn('No valid grounded URLs, falling back to parsed response');
-      }
-    } else {
-      console.warn('No grounded articles found, using parsed response (may contain hallucinated URLs)');
-    }
     
     const duration = Date.now() - startTime;
     console.log(`[${new Date().toISOString()}] POST /analyze - Completed in ${duration}ms`);
     
-    res.json(parsedResponse);
+    // Return analysis only (no related articles - those come from /search endpoint)
+    const response = {
+      definitions: parsedResponse.definitions,
+      arguments: parsedResponse.arguments
+    };
+    
+    // Log response summary for debugging
+    console.log('Response being sent:', JSON.stringify({
+      definitionsCount: parsedResponse.definitions.length,
+      mainArgsCount: parsedResponse.arguments.main.length,
+      counterArgsCount: parsedResponse.arguments.counter.length
+    }, null, 2));
+    
+    res.json(response);
     
   } catch (error) {
     const duration = Date.now() - startTime;
     console.error(`[${new Date().toISOString()}] POST /analyze - Error after ${duration}ms:`, error);
     
     // Pass error to error handling middleware
+    next(error);
+  }
+});
+
+// Search endpoint - returns only related article URLs using Google Search grounding
+app.post('/search', async (req, res, next) => {
+  const startTime = Date.now();
+  
+  try {
+    console.log(`[${new Date().toISOString()}] POST /search - Request received`);
+    
+    // Validate request body
+    const { searchQuery } = req.body;
+    
+    if (!searchQuery || typeof searchQuery !== 'string') {
+      return res.status(400).json({ 
+        error: 'Missing or invalid searchQuery'
+      });
+    }
+    
+    console.log(`Search query: ${searchQuery}`);
+    
+    // Build optimized prompt that forces Gemini to include URLs in JSON
+    const prompt = `Use Google Search to find 3-5 real articles about: ${searchQuery}
+
+CRITICAL REQUIREMENTS:
+1. Use the Google Search tool to find actual, existing articles
+2. You MUST include the URLs you find in the JSON response below
+3. These URLs will be clickable links for users - they must be real URLs from your search
+4. Do NOT rely only on grounding metadata - put the search results in the JSON structure
+5. Do NOT fabricate, guess, or hallucinate URLs
+
+Return this exact JSON structure with articles you found through Google Search:
+{
+  "articles": [
+    {"title": "Actual article title from your search", "url": "https://real-url-from-search.com"},
+    {"title": "Second article from search results", "url": "https://another-real-url.com"},
+    {"title": "Third article from search results", "url": "https://third-url.com"}
+  ]
+}
+
+IMPORTANT: Users will click these links. Include the real URLs you discovered through Google Search in the JSON above.`;
+    
+    // Call Gemini with Google Search grounding tool
+    const result = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      tools: [{ google_search: {} }]
+    });
+    
+    const response = result.response;
+    const candidate = response.candidates?.[0];
+    const responseText = candidate?.content?.parts?.[0]?.text || '';
+    
+    // Extract from grounding metadata (most reliable if available)
+    const groundedArticles = extractRelatedArticlesFromGrounding(response);
+    console.log(`Grounding metadata: ${groundedArticles.length} articles`);
+    
+    // Parse JSON response (fallback when grounding is empty)
+    let jsonArticles = [];
+    try {
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.articles && Array.isArray(parsed.articles)) {
+          jsonArticles = stripCitations(parsed.articles); // Remove citation numbers
+        }
+      }
+    } catch (e) {
+      console.warn('Could not parse JSON from search response:', e.message);
+    }
+    console.log(`JSON response: ${jsonArticles.length} articles`);
+    
+    // Multi-tier fallback strategy
+    // Priority 1: Grounded redirect URLs (most trustworthy)
+    const allArticles = [...groundedArticles, ...jsonArticles];
+    const groundedRedirects = allArticles.filter(article => 
+      article.url && article.url.includes('vertexaisearch.cloud.google.com/grounding-api-redirect')
+    );
+    
+    // Priority 2: Any articles from grounding metadata
+    // Priority 3: Articles from JSON response (when grounding is empty)
+    let articles = groundedRedirects.length > 0 
+      ? groundedRedirects 
+      : (groundedArticles.length > 0 ? groundedArticles : jsonArticles);
+    
+    // Validate URLs
+    articles = articles.filter(article => {
+      try {
+        new URL(article.url);
+        return true;
+      } catch {
+        console.warn(`Invalid URL filtered: ${article.url}`);
+        return false;
+      }
+    });
+    
+    // Log source for debugging
+    const source = groundedRedirects.length > 0 ? 'grounded redirects' :
+                   groundedArticles.length > 0 ? 'grounding metadata' : 'JSON response';
+    console.log(`Articles source: ${source} (${articles.length} articles)`);
+    
+    // Log article details
+    for (const article of articles.slice(0, 3)) {
+      console.log(`  - ${article.title}: ${article.url.substring(0, 80)}...`);
+    }
+    
+    const duration = Date.now() - startTime;
+    console.log(`[${new Date().toISOString()}] POST /search - Completed in ${duration}ms`);
+    console.log(`Found ${articles.length} related articles`);
+    
+    res.json({ articles });
+    
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`[${new Date().toISOString()}] POST /search - Error after ${duration}ms:`, error);
     next(error);
   }
 });
