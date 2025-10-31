@@ -65,7 +65,10 @@ async function build() {
     // Copy static files
     const staticFiles = [
       'popup.html',
-      'manifest.json'
+      'manifest.json',
+      'options.html',
+      'options.js',
+      'options.css'
     ];
 
     staticFiles.forEach(file => {

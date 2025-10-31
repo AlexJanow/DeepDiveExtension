@@ -484,7 +484,6 @@ class DeepDiveAssistant {
       console.log('Looking for UI elements...');
       this.summarizeBtn = document.getElementById('summarizeBtn');
       this.analyzeBtn = document.getElementById('analyzeBtn');
-      this.immediateQueryGenCheckbox = document.getElementById('immediateQueryGen');
       this.spinner = document.getElementById('spinner');
       this.output = document.getElementById('output');
       this.error = document.getElementById('error');
@@ -502,7 +501,6 @@ class DeepDiveAssistant {
       // Bind methods
       this.handleInstantSummary = this.handleInstantSummary.bind(this);
       this.handleDeepDiveAnalysis = this.handleDeepDiveAnalysis.bind(this);
-      this.handleSettingsChange = this.handleSettingsChange.bind(this);
       console.log('Methods bound');
       
       // Initialize
@@ -521,44 +519,26 @@ class DeepDiveAssistant {
     console.log('UI Elements:', {
       summarizeBtn: this.summarizeBtn ? 'found' : 'MISSING',
       analyzeBtn: this.analyzeBtn ? 'found' : 'MISSING',
-      immediateQueryGenCheckbox: this.immediateQueryGenCheckbox ? 'found' : 'MISSING',
       spinner: this.spinner ? 'found' : 'MISSING',
       output: this.output ? 'found' : 'MISSING',
       error: this.error ? 'found' : 'MISSING'
     });
     
-    if (!this.summarizeBtn || !this.analyzeBtn || !this.immediateQueryGenCheckbox) {
+    if (!this.summarizeBtn || !this.analyzeBtn) {
       console.error('ERROR: Required UI elements not found!');
       return;
     }
     
     // Load settings
     const mode = await this.settings.get('queryGenerationMode');
-    this.immediateQueryGenCheckbox.checked = (mode === 'immediate');
     
     // Attach event listeners
     this.summarizeBtn.addEventListener('click', this.handleInstantSummary);
     this.analyzeBtn.addEventListener('click', this.handleDeepDiveAnalysis);
-    this.immediateQueryGenCheckbox.addEventListener('change', this.handleSettingsChange);
     console.log('Event listeners attached successfully');
     
     // Pre-generate search query if immediate mode is enabled
     if (mode === 'immediate') {
-      this.preGenerateSearchQuery();
-    }
-  }
-  
-  /**
-   * Handle settings checkbox change
-   */
-  async handleSettingsChange() {
-    const isImmediate = this.immediateQueryGenCheckbox.checked;
-    const mode = isImmediate ? 'immediate' : 'on-demand';
-    await this.settings.set('queryGenerationMode', mode);
-    console.log(`Query generation mode changed to: ${mode}`);
-    
-    // If switching to immediate mode and no query exists, generate now
-    if (isImmediate && !this.preGeneratedSearchQuery && !this.isGeneratingQuery) {
       this.preGenerateSearchQuery();
     }
   }
@@ -767,30 +747,7 @@ class DeepDiveAssistant {
       this.showLoading();
       ErrorHandler.clearError(this.error);
       
-      // Check API availability first
-      console.log('Checking Summarizer API availability...');
-      const availability = await this.summarizerService.checkAvailability();
-      console.log('API availability:', availability);
-      console.log('Is string, not object. Value:', availability);
-      
-      if (!availability.available) {
-        console.error('Summarizer API not available:', availability.reason);
-        const error = new Error(availability.reason);
-        error.name = 'APIUnavailableError';
-        throw error;
-      }
-      
-      // Check user activation
-      console.log('Checking user activation...');
-      if (!this.summarizerService.checkUserActivation()) {
-        console.error('User activation not active');
-        const error = new Error('User activation required. Please click the button again.');
-        error.name = 'UserActivationError';
-        throw error;
-      }
-      console.log('User activation OK');
-      
-      // Get page text
+      // Get page text (optimistic approach - try to summarize immediately)
       console.log('Getting page text from content script...');
       const { text, url } = await this.getPageText();
       console.log(`Got page text: ${text.length} characters from ${url}`);
@@ -798,7 +755,7 @@ class DeepDiveAssistant {
       // Generate cache key
       const cacheKey = await this.cache.generateCacheKey(url, text);
       
-      // Check cache first
+      // Check cache first (instant if hit)
       if (await this.cache.isValid(cacheKey)) {
         const cached = await this.cache.get(cacheKey);
         console.log('Using cached summary');
@@ -817,27 +774,11 @@ class DeepDiveAssistant {
         this.hideLoading();
         return;
       }
-      
-      // Check if model is ready (already downloaded)
-      const isModelReady = availability.reason === 'readily';
-      console.log('Model ready:', isModelReady, 'reason:', availability.reason);
 
-      // Generate new summary - only show download UI when actual progress events arrive
+      // Try to summarize immediately (optimistic approach)
+      // Model is already downloaded - no progress callback needed
       console.log('Generating new summary...');
-      let downloadShown = false;
-      // NUR Progress-Callback übergeben wenn Model NICHT readily ist
-      const progressCallback = (!isModelReady) ? (percent) => {
-        const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
-        if (!downloadShown) {
-          this.output.innerHTML = '<div class="info-message"><p>Downloading AI model...</p></div>';
-          this.output.hidden = false;
-          downloadShown = true;
-        }
-        this.output.innerHTML = `<div class="info-message"><p>Downloading AI model... ${safePercent}%</p></div>`;
-        this.output.hidden = false;
-      } : null;
-
-      const summary = await this.summarizerService.summarize(text, 'Web article', progressCallback);
+      const summary = await this.summarizerService.summarize(text, 'Web article');
       
       // Cache the result
       await this.cache.set(cacheKey, summary);
@@ -860,6 +801,20 @@ class DeepDiveAssistant {
       console.error('Error name:', error.name);
       console.error('Error message:', error.message);
       console.error('Error stack:', error.stack);
+      
+      // Only check availability if summarization failed
+      if (error.message && (error.message.includes('Summarizer') || error.name === 'NotFoundError')) {
+        try {
+          const availability = await this.summarizerService.checkAvailability();
+          if (!availability.available) {
+            const apiError = new Error(availability.reason);
+            apiError.name = 'APIUnavailableError';
+            error = apiError;
+          }
+        } catch (checkError) {
+          console.warn('Failed to check availability:', checkError);
+        }
+      }
       
       const errorInfo = ErrorHandler.handle(error, 'instantSummary');
       console.log('Error info:', errorInfo);
@@ -889,14 +844,7 @@ class DeepDiveAssistant {
     try {
       console.log('Generating search query using local Summarizer API...');
       
-      // Check API availability
-      const availability = await this.summarizerService.checkAvailability();
-      if (!availability.available) {
-        console.warn('Summarizer API not available, skipping query generation');
-        return null;
-      }
-      
-      // Create a specialized summarizer for key points extraction
+      // Create a specialized summarizer for key points extraction (optimistic approach)
       const querySummarizer = await Summarizer.create({
         // Produce a single-line, query-like headline
         type: 'headline',

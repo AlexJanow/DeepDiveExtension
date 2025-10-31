@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DeepDive Assistant Options</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="options-container">
+    <header>
+      <h1>DeepDive Assistant</h1>
+      <p class="subtitle">Extension Settings</p>
+    </header>
+    
+    <div class="settings-content">
+      <div class="setting-item">
+        <label>
+          <input type="checkbox" id="immediateQueryGen">
+          <span class="setting-label">
+            <strong>Prepare analysis on page load</strong>
+            <small>Pre-generate search queries when extension opens (faster Deep Dive analysis)</small>
+          </span>
+        </label>
+      </div>
+      
+      <div id="status" class="status-message" hidden></div>
+    </div>
+  </div>
+  
+  <script src="options.js"></script>
+</body>
+</html>
+
