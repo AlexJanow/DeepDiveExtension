@@ -193,6 +193,7 @@ class SummarizerService {
    * @returns {Promise<Object>} Summarizer instance
    */
   async initialize(onProgress = null) {
+    // If already initialized, return existing instance without re-initializing
     if (this.summarizer) {
       return this.summarizer;
     }
@@ -204,8 +205,8 @@ class SummarizerService {
         outputLanguage: 'en'
       };
       
-      // Add monitor callback if progress callback provided
-      if (onProgress) {
+      // Only add monitor if progress callback provided AND model not yet initialized
+      if (onProgress && !this.summarizer) {
         createOptions.monitor = (m) => {
           m.addEventListener('downloadprogress', (e) => {
             const percent = Math.round(e.loaded * 100);
@@ -770,19 +771,13 @@ class DeepDiveAssistant {
       console.log('Checking Summarizer API availability...');
       const availability = await this.summarizerService.checkAvailability();
       console.log('API availability:', availability);
+      console.log('Is string, not object. Value:', availability);
       
       if (!availability.available) {
         console.error('Summarizer API not available:', availability.reason);
         const error = new Error(availability.reason);
         error.name = 'APIUnavailableError';
         throw error;
-      }
-      
-      // Show download notice if model needs to be downloaded
-      if (availability.needsDownload) {
-        console.log('AI model download required');
-        this.output.innerHTML = '<div class="info-message"><p>Downloading AI model... This may take a moment.</p></div>';
-        this.output.hidden = false;
       }
       
       // Check user activation
@@ -823,13 +818,26 @@ class DeepDiveAssistant {
         return;
       }
       
-      // Generate new summary with progress callback
+      // Check if model is ready (already downloaded)
+      const isModelReady = availability.reason === 'readily';
+      console.log('Model ready:', isModelReady, 'reason:', availability.reason);
+
+      // Generate new summary - only show download UI when actual progress events arrive
       console.log('Generating new summary...');
-      const summary = await this.summarizerService.summarize(text, 'Web article', (percent) => {
-        // Update download progress in UI
-        this.output.innerHTML = `<div class="info-message"><p>Downloading AI model... ${percent}%</p></div>`;
+      let downloadShown = false;
+      // NUR Progress-Callback übergeben wenn Model NICHT readily ist
+      const progressCallback = (!isModelReady) ? (percent) => {
+        const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+        if (!downloadShown) {
+          this.output.innerHTML = '<div class="info-message"><p>Downloading AI model...</p></div>';
+          this.output.hidden = false;
+          downloadShown = true;
+        }
+        this.output.innerHTML = `<div class="info-message"><p>Downloading AI model... ${safePercent}%</p></div>`;
         this.output.hidden = false;
-      });
+      } : null;
+
+      const summary = await this.summarizerService.summarize(text, 'Web article', progressCallback);
       
       // Cache the result
       await this.cache.set(cacheKey, summary);
