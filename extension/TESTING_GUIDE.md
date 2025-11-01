@@ -70,8 +70,8 @@ Build complete!
 1. Open the test article: `file:///path/to/extension/test-analysis.html`
    - Or navigate to any news article online (e.g., BBC, NYTimes, Medium)
 2. Click the DeepDive Assistant extension icon in the toolbar
-3. Click the "🧠 Deep Dive Analysis" button
-4. Wait for the analysis to complete (5-20 seconds)
+3. Watch the automatic summary stream in, then click the "🧠 Deep Dive Analysis" button
+4. Wait for the analysis to complete 
 
 **Expected Results**:
 - ✅ Loading spinner appears immediately
@@ -184,16 +184,16 @@ Analysis complete: {
 - ✅ No memory leaks or performance degradation
 - ✅ No errors in console
 
+
 ### Test 7: Instant Summary + Deep Dive
 
 **Objective**: Verify both features work together.
 
 **Steps**:
 1. Navigate to an article
-2. Click "⚡ Instant Summary" button
-3. Wait for summary to appear
-4. Click "🧠 Deep Dive Analysis" button
-5. Wait for analysis to appear
+2. Open the extension popup and let the automatic summary finish
+3. Click "🧠 Deep Dive Analysis" button
+4. Wait for analysis to appear
 
 **Expected Results**:
 - ✅ Instant summary completes first

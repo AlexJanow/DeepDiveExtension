@@ -29,6 +29,7 @@ The extension processes the following data:
 
 **How it works:**
 - Uses Chrome's built-in Summarizer API
+- Starts automatically when you open the popup
 - All processing happens on your device
 - **NO data is sent to external servers**
 - Results are cached locally in your browser

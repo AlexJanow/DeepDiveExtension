@@ -65,7 +65,7 @@ PORT=3001 npm start
    npm run build
    ```
    Then load `extension/dist` as an unpacked extension in `chrome://extensions`.
-4. **Verify end-to-end:** open a news article, click the toolbar icon, confirm the instant summary (client-side) and Deep Dive analysis (requests to `http://localhost:3001`).
+4. **Verify end-to-end:** open a news article, click the toolbar icon, watch the instant summary stream in automatically (client-side) and then trigger Deep Dive analysis (requests to `http://localhost:3001`).
 5. **Troubleshoot quickly:**
    - If instant summary fails, confirm the Summarizer API is available in Chrome's UI.
    - If Deep Dive errors, ensure the backend console shows incoming requests and that the Gemini API key is valid.
@@ -92,7 +92,7 @@ npm run dev  # Auto-restart on changes
 
 ## Features
 
-- **Instant Summary**: Client-side summarization using Chrome's built-in Summarizer API
+- **Instant Summary**: Client-side summarization using Chrome's built-in Summarizer API that auto-runs when you open the popup
 - **Deep Dive Analysis**: Server-side analysis with Google Search grounding for real, verifiable related article URLs, plus definitions and arguments
 - **Privacy-First**: Local processing for summaries, clear communication about data handling
 - **Smart Caching**: Both Instant Summary and Deep Dive results are cached locally to reduce redundant API calls
