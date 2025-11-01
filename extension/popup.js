@@ -369,9 +369,9 @@ class ErrorHandler {
    */
   static handle(error, context) {
     // Log detailed error information for debugging
-    console.error(`Error in ${context}:`, error);
-    console.error('Error stack:', error.stack);
-    console.error('Error details:', {
+    console.warn(`Error in ${context}:`, error);
+    console.warn('Error stack:', error.stack);
+    console.warn('Error details:', {
       name: error.name,
       message: error.message,
       context: context
@@ -536,6 +536,40 @@ class DeepDiveAssistant {
     } catch (error) {
       console.error('ERROR in DeepDiveAssistant constructor:', error);
       console.error('Error stack:', error.stack);
+    }
+  }
+  
+  /**
+   * Resolve the backend URL used for Deep Dive requests
+   * @returns {string}
+   */
+  getBackendUrl() {
+    return 'http://localhost:3001';
+  }
+
+  /**
+   * Perform a quick health check against the backend to surface actionable errors
+   * @param {number} timeoutMs
+   * @returns {Promise<{ok: boolean, error?: Error}>}
+   */
+  async checkBackendHealth(timeoutMs = 4000) {
+    const backendUrl = this.getBackendUrl();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(`${backendUrl}/health`, { signal: controller.signal });
+      if (!response.ok) {
+        return {
+          ok: false,
+          error: new Error(`Health check failed with status ${response.status}`)
+        };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error };
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
   
@@ -721,7 +755,7 @@ class DeepDiveAssistant {
           console.warn('Failed to check availability:', checkError);
         }
       }
-
+      
       const errorInfo = ErrorHandler.handle(error, 'autoSummarize');
       ErrorHandler.displayError(
         errorInfo.message,
@@ -1029,7 +1063,7 @@ class DeepDiveAssistant {
     // Backend API URL (configurable)
     // In production, this should be an HTTPS URL
     // For local development, HTTP localhost is allowed
-    const BACKEND_URL = 'http://localhost:3001';
+    const BACKEND_URL = this.getBackendUrl();
     
     // Enforce HTTPS in production (when not using localhost)
     const url = new URL(BACKEND_URL);
@@ -1211,6 +1245,7 @@ class DeepDiveAssistant {
       console.log('Already processing, ignoring click');
       return;
     }
+    this.isProcessing = true;
     
     try {
       console.log('Starting deep dive analysis process...');
@@ -1240,6 +1275,23 @@ class DeepDiveAssistant {
       // Wait for search query if in progress
       await this.waitForSearchQuery();
       const searchQuery = this.preGeneratedSearchQuery;
+      
+      // Ensure backend is reachable before firing requests
+      const backendStatus = await this.checkBackendHealth();
+      if (!backendStatus.ok) {
+        const backendUrl = this.getBackendUrl();
+        console.warn('Backend health check failed:', backendStatus.error?.message || backendStatus.error);
+        ErrorHandler.displayError(
+          `The Deep Dive backend is not reachable at ${backendUrl}. Start it locally with \`PORT=3001 npm start\` and try again.`,
+          this.error,
+          this.output,
+          {
+            showRetry: true,
+            onRetry: () => this.handleDeepDiveAnalysis()
+          }
+        );
+        return;
+      }
       
       console.log(`Article length: ${text.length} characters from ${url}`);
       console.log(`Search query: ${searchQuery || 'none'}`);
@@ -1299,7 +1351,7 @@ class DeepDiveAssistant {
       await this.cache.set(cacheKey, combinedResult);
       
     } catch (error) {
-      console.error('Deep dive analysis error:', error);
+      console.warn('Deep dive analysis error:', error);
       const errorInfo = ErrorHandler.handle(error, 'deepDiveAnalysis');
       ErrorHandler.displayError(
         errorInfo.message, 
@@ -1307,6 +1359,8 @@ class DeepDiveAssistant {
         this.output,
         { showRetry: errorInfo.recoverable, onRetry: () => this.handleDeepDiveAnalysis() }
       );
+    } finally {
+      this.isProcessing = false;
     }
   }
   
@@ -1347,7 +1401,7 @@ class DeepDiveAssistant {
       return [];
     }
     
-    const BACKEND_URL = 'http://localhost:3001';
+    const BACKEND_URL = this.getBackendUrl();
     const url = new URL(BACKEND_URL);
     if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1' && url.protocol !== 'https:') {
       throw new Error('Backend URL must use HTTPS for security');
@@ -1375,7 +1429,7 @@ class DeepDiveAssistant {
    * @returns {Promise<Object>} Analysis with definitions and arguments
    */
   async fetchAnalysis(text, concepts = []) {
-    const BACKEND_URL = 'http://localhost:3001';
+    const BACKEND_URL = this.getBackendUrl();
     const url = new URL(BACKEND_URL);
     if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1' && url.protocol !== 'https:') {
       throw new Error('Backend URL must use HTTPS for security');
