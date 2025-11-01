@@ -30,10 +30,10 @@ npm run dev
 
 ### Production mode:
 ```bash
-npm start
+PORT=3001 npm start
 ```
 
-The server will start on port 3000 by default (configurable via `PORT` environment variable).
+The server will start on port 3001 by default (configurable via `PORT` environment variable).
 
 ## API Endpoints
 
@@ -75,6 +75,6 @@ Deployment options that provide HTTPS by default:
 ## Environment Variables
 
 - `GEMINI_API_KEY` - Your Gemini API key (required)
-- `PORT` - Server port (default: 3000)
+- `PORT` - Server port (default: 3001)
 - `NODE_ENV` - Environment mode (development/production)
 - `ALLOWED_ORIGINS` - CORS allowed origins (default: chrome-extension://*)

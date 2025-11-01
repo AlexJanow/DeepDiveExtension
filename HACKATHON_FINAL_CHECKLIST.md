@@ -158,10 +158,9 @@
 **Impact:** MEDIUM - Professional impression
 
 **Action Items:**
-1. **Fix port mismatch** (5 min):
-   - Backend defaults to 3000, extension calls 3001
-   - Update `backend/.env` to set `PORT=3001` OR
-   - Update extension to call 3000
+1. **Confirm backend port** (5 min):
+   - Both backend and extension now default to `http://localhost:3001`
+   - If judges need a different port, update `PORT` in `backend/.env`
 
 2. **Add loading states** (15 min):
    - Improve download progress UI
@@ -364,10 +363,9 @@
 6. **Testing** - Needs more comprehensive testing
 
 ### 🚫 Known Issues
-1. **Port mismatch**: Extension calls 3001, backend defaults to 3000
-2. **Backend URL hardcoded**: Needs to be updated for production
-3. **No demo materials**: Video and screenshots missing
-4. **Extension ID not set**: CORS will be wide open initially
+1. **Backend URL hardcoded**: Needs to be updated for production
+2. **No demo materials**: Video and screenshots missing
+3. **Extension ID not set**: CORS will be wide open initially
 
 ---
 

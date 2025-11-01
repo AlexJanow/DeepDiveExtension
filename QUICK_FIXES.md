@@ -2,9 +2,9 @@
 
 ## 1. Port Mismatch Fixed ✅
 
-**Issue:** Extension calls `http://localhost:3001` but backend defaults to port 3000
+**Original issue:** Extension called `http://localhost:3001` but the backend defaulted to port 3000.
 
-**Fix:** Updated `backend/.env` to set `PORT=3001`
+**Fix:** Backend now defaults to port 3001 so the extension and API are aligned out of the box.
 
 **Verification:**
 ```bash

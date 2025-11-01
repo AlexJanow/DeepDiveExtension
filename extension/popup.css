@@ -445,6 +445,27 @@ header h1 {
   letter-spacing: 0.5px;
 }
 
+.streaming-badge {
+  background: #3b82f6;
+  color: white;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
 /* Summary Content */
 .summary-content {
   line-height: 1.7;

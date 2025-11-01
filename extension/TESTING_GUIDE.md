@@ -27,7 +27,7 @@ npm run dev
 
 You should see:
 ```
-DeepDive Assistant backend running on port 3000
+DeepDive Assistant backend running on port 3001
 Environment: development
 CORS enabled for chrome-extension:// origins
 ```
@@ -279,7 +279,7 @@ Analysis complete: {
 **Problem**: Analysis fails with network error immediately
 
 **Solution**:
-1. Verify backend is running: `curl http://localhost:3000/health`
+1. Verify backend is running: `curl http://localhost:3001/health`
 2. Check backend console for errors
 3. Verify CORS is configured correctly
 4. Check Chrome DevTools Network tab for failed requests

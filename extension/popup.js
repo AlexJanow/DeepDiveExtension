@@ -83,7 +83,8 @@ class SettingsManager {
   constructor() {
     this.storage = chrome.storage.sync;
     this.defaults = {
-      queryGenerationMode: 'immediate' // 'immediate' or 'on-demand'
+      queryGenerationMode: 'immediate', // 'immediate' or 'on-demand'
+      preSummarize: true // Pre-generate summary on page load
     };
   }
   
@@ -241,16 +242,45 @@ class SummarizerService {
     }
     
     try {
-      // Generate summary with optional context and explicit output language
+      // Generate summary with optional context
+      // Note: outputLanguage is set in create(), not per summarize() call
       const summary = await this.summarizer.summarize(textToSummarize, {
-        context: context || 'Web article',
-        // Setting outputLanguage per request silences API warning and improves quality
-        outputLanguage: 'en'
+        context: context || 'Web article'
       });
       
       return summary;
     } catch (error) {
       throw new Error(`Summarization failed: ${error.message}`);
+    }
+  }
+  
+  /**
+   * Generate streaming summary with real-time updates
+   * @param {string} text - Text to summarize
+   * @param {string} context - Optional context for better summarization
+   * @param {Function} onProgress - Optional callback for download progress
+   * @returns {AsyncIterable<string>} Async iterable of summary chunks
+   */
+  async summarizeStreaming(text, context = '', onProgress = null) {
+    // Initialize if needed (with download progress callback)
+    await this.initialize(onProgress);
+    
+    // Truncate text to safe character limit (10,000 chars)
+    const textToSummarize = this.truncateToLimit(text, 10000);
+    
+    if (textToSummarize.length < text.length) {
+      console.warn(`Text truncated from ${text.length} to ${textToSummarize.length} characters`);
+    }
+    
+    try {
+      // Generate streaming summary with optional context
+      const stream = this.summarizer.summarizeStreaming(textToSummarize, {
+        context: context || 'Web article'
+      });
+      
+      return stream;
+    } catch (error) {
+      throw new Error(`Streaming summarization failed: ${error.message}`);
     }
   }
   
@@ -482,7 +512,6 @@ class DeepDiveAssistant {
       
       // UI elements
       console.log('Looking for UI elements...');
-      this.summarizeBtn = document.getElementById('summarizeBtn');
       this.analyzeBtn = document.getElementById('analyzeBtn');
       this.spinner = document.getElementById('spinner');
       this.output = document.getElementById('output');
@@ -499,7 +528,6 @@ class DeepDiveAssistant {
       };
       
       // Bind methods
-      this.handleInstantSummary = this.handleInstantSummary.bind(this);
       this.handleDeepDiveAnalysis = this.handleDeepDiveAnalysis.bind(this);
       console.log('Methods bound');
       
@@ -517,14 +545,13 @@ class DeepDiveAssistant {
   async init() {
     console.log('Initializing DeepDive Assistant...');
     console.log('UI Elements:', {
-      summarizeBtn: this.summarizeBtn ? 'found' : 'MISSING',
       analyzeBtn: this.analyzeBtn ? 'found' : 'MISSING',
       spinner: this.spinner ? 'found' : 'MISSING',
       output: this.output ? 'found' : 'MISSING',
       error: this.error ? 'found' : 'MISSING'
     });
     
-    if (!this.summarizeBtn || !this.analyzeBtn) {
+    if (!this.analyzeBtn) {
       console.error('ERROR: Required UI elements not found!');
       return;
     }
@@ -533,13 +560,26 @@ class DeepDiveAssistant {
     const mode = await this.settings.get('queryGenerationMode');
     
     // Attach event listeners
-    this.summarizeBtn.addEventListener('click', this.handleInstantSummary);
     this.analyzeBtn.addEventListener('click', this.handleDeepDiveAnalysis);
     console.log('Event listeners attached successfully');
     
     // Pre-generate search query if immediate mode is enabled
     if (mode === 'immediate') {
       this.preGenerateSearchQuery();
+    }
+    
+    // Pre-initialize summarizer in background for faster first use
+    // This happens asynchronously - doesn't block popup opening
+    this.summarizerService.initialize().catch(err => {
+      console.warn('Pre-initialization of summarizer failed:', err);
+      // Fail silently - will initialize on first use
+    });
+
+    // Auto-summarize if enabled (default: true)
+    // This will show the summary immediately with streaming for real-time display
+    const preSummarize = await this.settings.get('preSummarize');
+    if (preSummarize !== false) {
+      this.autoSummarize();
     }
   }
   
@@ -574,6 +614,190 @@ class DeepDiveAssistant {
       // Continue without pre-generated query - fallback will be used
     } finally {
       this.isGeneratingQuery = false;
+    }
+  }
+  
+  /**
+   * Auto-summarize article immediately when popup opens
+   * Uses streaming for real-time display and caching for instant subsequent loads
+   */
+  async autoSummarize() {
+    if (this.isProcessing) {
+      console.log('[AUTO-SUM] Already processing, skipping...');
+      return;
+    }
+    
+    try {
+      this.isProcessing = true;
+      console.log('[AUTO-SUM] Starting auto-summarization...');
+      const startTime = performance.now();
+      
+      // Show loading state
+      this.showLoading('Generating summary...');
+      ErrorHandler.clearError(this.error);
+      
+      // Get page text
+      const { text, url } = await this.getPageText();
+      console.log(`[AUTO-SUM] Got page text: ${text.length} chars from ${url}`);
+      
+      // Generate cache key
+      const cacheKey = await this.cache.generateCacheKey(url, text);
+      console.log(`[AUTO-SUM] Cache key: ${cacheKey}`);
+      
+      // Check cache first (instant if hit)
+      if (await this.cache.isValid(cacheKey)) {
+        const cached = await this.cache.get(cacheKey);
+        console.log('[AUTO-SUM] ✅ Using cached summary (instant!)');
+        
+        this.displaySummary(cached.value, true);
+        this.hideLoading();
+        
+        const elapsed = (performance.now() - startTime) / 1000;
+        console.log(`[AUTO-SUM] Displayed in ${elapsed.toFixed(2)}s`);
+        return;
+      }
+      
+      // Stream the summary for real-time display
+      console.log('[AUTO-SUM] Streaming summary...');
+      const stream = await this.summarizerService.summarizeStreaming(text, 'Web article');
+      
+      let accumulatedSummary = '';
+      let chunkCount = 0;
+      let lastUpdate = 0;
+      
+      for await (const chunk of stream) {
+        chunkCount++;
+        
+        // Skip empty chunks - they're control signals, not content
+        if (!chunk || chunk.trim().length === 0) {
+          console.log(`[AUTO-SUM] Skipping empty chunk ${chunkCount}`);
+          continue;
+        }
+        
+        accumulatedSummary += chunk;
+        const summaryLength = accumulatedSummary.length;
+        console.log(`[AUTO-SUM] Chunk ${chunkCount} appended, total length: ${summaryLength}`);
+        
+        // Update display every 100ms for smooth streaming effect
+        const now = Date.now();
+        if (now - lastUpdate > 100) {
+          this.displaySummary(accumulatedSummary, false);
+          lastUpdate = now;
+        }
+      }
+      
+      // Final update with complete summary (use last valid summary)
+      if (accumulatedSummary && accumulatedSummary.trim().length > 0) {
+        this.displaySummary(accumulatedSummary, false);
+        console.log(`[AUTO-SUM] Final display with ${accumulatedSummary.length} chars`);
+      } else {
+        console.error('[AUTO-SUM] No valid summary generated!');
+      }
+      
+      this.hideLoading();
+      
+      // Cache the result (use last valid summary)
+      if (accumulatedSummary) {
+        await this.cache.set(cacheKey, accumulatedSummary);
+      }
+      
+      const elapsed = (performance.now() - startTime) / 1000;
+      console.log(`[AUTO-SUM] ✅ Completed in ${elapsed.toFixed(2)}s (${chunkCount} chunks)`);
+      
+    } catch (error) {
+      console.error('[AUTO-SUM] ❌ Failed:', error);
+      this.hideLoading();
+      
+      // Check if it's an API availability issue
+      if (error.message && (error.message.includes('Summarizer') || error.name === 'NotFoundError')) {
+        try {
+          const availability = await this.summarizerService.checkAvailability();
+          if (!availability.available) {
+            const apiError = new Error(availability.reason);
+            apiError.name = 'APIUnavailableError';
+            error = apiError;
+          }
+        } catch (checkError) {
+          console.warn('Failed to check availability:', checkError);
+        }
+      }
+
+      const errorInfo = ErrorHandler.handle(error, 'autoSummarize');
+      ErrorHandler.displayError(
+        errorInfo.message,
+        this.error,
+        this.output,
+        {
+          showRetry: errorInfo.recoverable,
+          onRetry: () => this.autoSummarize()
+        }
+      );
+      // Buttons remain visible as fallback
+    } finally {
+      this.isProcessing = false;
+    }
+  }
+  
+  /**
+   * Helper method to display summary with consistent formatting
+   * @param {string} summary - The summary text to display
+   * @param {boolean} isCached - Whether this is a cached result
+   */
+  displaySummary(summary, isCached) {
+    const badge = isCached 
+      ? '<span class="cache-badge">Cached</span>'
+      : '';
+      
+    const html = `
+      <div class="result-header">
+        <h3>📝 Article Summary</h3>
+        ${badge}
+      </div>
+      <div class="summary-content">
+        ${this.renderMarkdown(summary)}
+      </div>
+    `;
+    
+    this.displayOutput(html);
+  }
+  
+  /**
+   * Pre-generate summary when popup opens for instant display
+   * @deprecated Use autoSummarize() instead for better UX with streaming
+   */
+  async preGenerateSummary() {
+    try {
+      console.log('[PRE-GEN] Starting pre-generation...');
+      const startTime = performance.now();
+      
+      // Get page text
+      const { text, url } = await this.getPageText();
+      console.log(`[PRE-GEN] Got page text: ${text.length} chars from ${url}`);
+      
+      // Generate cache key
+      const cacheKey = await this.cache.generateCacheKey(url, text);
+      console.log(`[PRE-GEN] Cache key: ${cacheKey}`);
+      
+      // Check if already cached
+      if (await this.cache.isValid(cacheKey)) {
+        console.log('[PRE-GEN] Summary already cached, skipping pre-generation');
+        return;
+      }
+      
+      // Generate summary in background
+      console.log('[PRE-GEN] Generating summary...');
+      const summary = await this.summarizerService.summarize(text, 'Web article');
+      console.log(`[PRE-GEN] Summary generated: ${summary.substring(0, 50)}...`);
+      
+      // Cache the result
+      await this.cache.set(cacheKey, summary);
+      
+      const elapsed = (performance.now() - startTime) / 1000;
+      console.log(`[PRE-GEN] ✅ Cached successfully in ${elapsed.toFixed(2)}s`);
+    } catch (error) {
+      console.error('[PRE-GEN] ❌ Failed:', error);
+      console.error('[PRE-GEN] Error stack:', error.stack);
+      // Fail silently - user can still click to generate on-demand
     }
   }
   
@@ -649,13 +873,23 @@ class DeepDiveAssistant {
   /**
    * Show loading spinner and disable buttons
    */
-  showLoading() {
+  showLoading(message = 'Processing...') {
     this.isProcessing = true;
     this.spinner.hidden = false;
+    
+    // Update spinner message if element exists
+    const spinnerText = this.spinner.querySelector('p');
+    if (spinnerText) {
+      spinnerText.textContent = message;
+    }
+    
     this.output.hidden = true;
     this.error.hidden = true;
-    this.summarizeBtn.disabled = true;
-    this.analyzeBtn.disabled = true;
+    
+    // Disable buttons if they exist
+    if (this.analyzeBtn) {
+      this.analyzeBtn.disabled = true;
+    }
   }
   
   /**
@@ -664,8 +898,11 @@ class DeepDiveAssistant {
   hideLoading() {
     this.isProcessing = false;
     this.spinner.hidden = true;
-    this.summarizeBtn.disabled = false;
-    this.analyzeBtn.disabled = false;
+    
+    // Re-enable buttons if they exist
+    if (this.analyzeBtn) {
+      this.analyzeBtn.disabled = false;
+    }
   }
   
   /**
@@ -727,113 +964,6 @@ class DeepDiveAssistant {
     return processedLines.join('\n');
   }
   
-  /**
-   * Handle Instant Summary button click
-   * 
-   * PRIVACY: This function processes all data locally using Chrome's built-in
-   * Summarizer API. No article text or user data is sent to external servers.
-   * All processing happens on the user's device.
-   */
-  async handleInstantSummary() {
-    console.log('=== INSTANT SUMMARY CLICKED ===');
-    
-    if (this.isProcessing) {
-      console.log('Already processing, ignoring click');
-      return;
-    }
-    
-    try {
-      console.log('Starting instant summary process...');
-      this.showLoading();
-      ErrorHandler.clearError(this.error);
-      
-      // Get page text (optimistic approach - try to summarize immediately)
-      console.log('Getting page text from content script...');
-      const { text, url } = await this.getPageText();
-      console.log(`Got page text: ${text.length} characters from ${url}`);
-      
-      // Generate cache key
-      const cacheKey = await this.cache.generateCacheKey(url, text);
-      
-      // Check cache first (instant if hit)
-      if (await this.cache.isValid(cacheKey)) {
-        const cached = await this.cache.get(cacheKey);
-        console.log('Using cached summary');
-        
-        const html = `
-          <div class="result-header">
-            <h3>📝 Instant Summary</h3>
-            <span class="cache-badge">Cached</span>
-          </div>
-          <div class="summary-content">
-            ${this.renderMarkdown(cached.value)}
-          </div>
-        `;
-        
-        this.displayOutput(html);
-        this.hideLoading();
-        return;
-      }
-
-      // Try to summarize immediately (optimistic approach)
-      // Model is already downloaded - no progress callback needed
-      console.log('Generating new summary...');
-      const summary = await this.summarizerService.summarize(text, 'Web article');
-      
-      // Cache the result
-      await this.cache.set(cacheKey, summary);
-      
-      // Display result
-      const html = `
-        <div class="result-header">
-          <h3>📝 Instant Summary</h3>
-        </div>
-        <div class="summary-content">
-          ${this.renderMarkdown(summary)}
-        </div>
-      `;
-      
-      this.displayOutput(html);
-      
-    } catch (error) {
-      console.error('=== ERROR in handleInstantSummary ===');
-      console.error('Error:', error);
-      console.error('Error name:', error.name);
-      console.error('Error message:', error.message);
-      console.error('Error stack:', error.stack);
-      
-      // Only check availability if summarization failed
-      if (error.message && (error.message.includes('Summarizer') || error.name === 'NotFoundError')) {
-        try {
-          const availability = await this.summarizerService.checkAvailability();
-          if (!availability.available) {
-            const apiError = new Error(availability.reason);
-            apiError.name = 'APIUnavailableError';
-            error = apiError;
-          }
-        } catch (checkError) {
-          console.warn('Failed to check availability:', checkError);
-        }
-      }
-      
-      const errorInfo = ErrorHandler.handle(error, 'instantSummary');
-      console.log('Error info:', errorInfo);
-      
-      // Show retry button for recoverable errors
-      ErrorHandler.displayError(
-        errorInfo.message, 
-        this.error, 
-        this.output,
-        {
-          showRetry: errorInfo.recoverable,
-          onRetry: () => this.handleInstantSummary()
-        }
-      );
-    } finally {
-      console.log('handleInstantSummary finally block');
-      this.hideLoading();
-    }
-  }
   
   /**
    * Generate search query using local Summarizer API
@@ -1479,7 +1609,6 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Log all elements we're looking for
   const elements = {
-    summarizeBtn: document.getElementById('summarizeBtn'),
     analyzeBtn: document.getElementById('analyzeBtn'),
     spinner: document.getElementById('spinner'),
     output: document.getElementById('output'),
@@ -1487,7 +1616,6 @@ document.addEventListener('DOMContentLoaded', () => {
   };
   
   console.log('DOM elements check:', {
-    summarizeBtn: elements.summarizeBtn ? 'found' : 'MISSING',
     analyzeBtn: elements.analyzeBtn ? 'found' : 'MISSING', 
     spinner: elements.spinner ? 'found' : 'MISSING',
     output: elements.output ? 'found' : 'MISSING',

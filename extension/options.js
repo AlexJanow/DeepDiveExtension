@@ -7,7 +7,8 @@ class SettingsManager {
   constructor() {
     this.storage = chrome.storage.sync;
     this.defaults = {
-      queryGenerationMode: 'immediate' // 'immediate' or 'on-demand'
+      queryGenerationMode: 'immediate', // 'immediate' or 'on-demand'
+      preSummarize: true // Pre-generate summary on page load
     };
   }
   
@@ -29,26 +30,35 @@ class SettingsManager {
 // Initialize settings manager
 const settings = new SettingsManager();
 const checkbox = document.getElementById('immediateQueryGen');
+const preSummarizeCheckbox = document.getElementById('preSummarize');
 const statusDiv = document.getElementById('status');
 
-// Load current setting
+// Load current settings
 async function loadSettings() {
   try {
     const mode = await settings.get('queryGenerationMode');
     checkbox.checked = (mode === 'immediate');
-    console.log('Loaded setting:', mode);
+    
+    const preSummarize = await settings.get('preSummarize');
+    preSummarizeCheckbox.checked = (preSummarize !== false); // Default true
+    
+    console.log('Loaded settings:', { mode, preSummarize });
   } catch (error) {
     console.error('Failed to load settings:', error);
     showStatus('Failed to load settings', 'error');
   }
 }
 
-// Save setting on change
+// Save settings on change
 async function saveSettings() {
   try {
     const mode = checkbox.checked ? 'immediate' : 'on-demand';
     await settings.set('queryGenerationMode', mode);
-    console.log('Saved setting:', mode);
+    
+    const preSummarize = preSummarizeCheckbox.checked;
+    await settings.set('preSummarize', preSummarize);
+    
+    console.log('Saved settings:', { mode, preSummarize });
     showStatus('Settings saved!', 'success');
   } catch (error) {
     console.error('Failed to save settings:', error);
@@ -71,6 +81,7 @@ function showStatus(message, type = 'success') {
 
 // Event listeners
 checkbox.addEventListener('change', saveSettings);
+preSummarizeCheckbox.addEventListener('change', saveSettings);
 
 // Load settings when page loads
 document.addEventListener('DOMContentLoaded', loadSettings);

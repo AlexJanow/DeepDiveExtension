@@ -35,3 +35,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Log service worker activation
 console.log('DeepDive Assistant service worker activated');
+

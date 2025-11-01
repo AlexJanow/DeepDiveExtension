@@ -148,8 +148,8 @@ We may update this privacy policy from time to time. Changes will be reflected i
 ## Contact
 
 For privacy concerns or questions:
-- Open an issue on our [GitHub repository](https://github.com/yourusername/deepdive-assistant)
-- Email: [your-email@example.com]
+- Open an issue on our [GitHub repository](https://github.com/AlexJanow/DeepDiveAssistant)
+- Email: [alexanderjanow@gmail.com](mailto:alexanderjanow@gmail.com)
 
 ## Compliance
 

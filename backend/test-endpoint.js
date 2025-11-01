@@ -1,7 +1,7 @@
 // Simple test script for the /analyze endpoint
 // Run this after starting the server with: node test-endpoint.js
 
-const BASE_URL = 'http://localhost:3000';
+const BASE_URL = 'http://localhost:3001';
 
 async function testEndpoint(testName, requestBody, expectedStatus) {
   console.log(`\n🧪 Testing: ${testName}`);

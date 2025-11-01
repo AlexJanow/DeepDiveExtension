@@ -21,7 +21,7 @@ const checks = [
   },
   {
     name: 'Backend URL configured',
-    test: popupJs.includes('http://localhost:3000'),
+    test: popupJs.includes('http://localhost:3001'),
     required: true
   },
   {
